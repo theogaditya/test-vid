@@ -7,40 +7,40 @@ export default function Home() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
-
-  // Change this from useState to useRef
   const isInitiatorRef = useRef(false);
 
   useEffect(() => {
     let cleanedUp = false;
 
     async function initWebRTC() {
-      // 1) Choose ws:// vs wss://
+      // Pick ws:// or wss:// based on page protocol:
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(`${protocol}://${window.location.host}/api/socket`);
       wsRef.current = ws;
 
-      // 2) Create the PeerConnection
+      // Create RTCPeerConnection
       const pc = new RTCPeerConnection({
         iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
       });
       pcRef.current = pc;
 
-      // 3) ICE candidates → broadcast over WS
+      // Send ICE candidates over WebSocket
       pc.onicecandidate = (e) => {
         if (e.candidate) {
-          ws.send(JSON.stringify({ type: 'candidate', candidate: e.candidate }));
+          ws.send(
+            JSON.stringify({ type: 'candidate', candidate: e.candidate })
+          );
         }
       };
 
-      // 4) When remote track arrives, attach to remote <video>
+      // When remote track arrives, attach to remote <video>
       pc.ontrack = (e) => {
         if (remoteVideoRef.current) {
           remoteVideoRef.current.srcObject = e.streams[0];
         }
       };
 
-      // 5) Get local media and add tracks
+      // Get local media & add track(s)
       try {
         const localStream = await navigator.mediaDevices.getUserMedia({
           video: true,
@@ -57,17 +57,16 @@ export default function Home() {
         return;
       }
 
-      // 6) Signaling logic: broadcast “join” when WS opens
+      // Send a “join” as soon as WS opens
       ws.onopen = () => {
         ws.send(JSON.stringify({ type: 'join' }));
       };
 
+      // Handle incoming signaling messages
       ws.onmessage = async (msgEv) => {
         const data = JSON.parse(msgEv.data);
         switch (data.type) {
           case 'join':
-            // If we hear “join” from someone else, and we are not yet the initiator,
-            // we become the initiator and send the offer.
             if (!isInitiatorRef.current) {
               isInitiatorRef.current = true;
               await doCall(pc, ws);
@@ -100,11 +99,11 @@ export default function Home() {
             break;
 
           default:
-            console.warn('Unknown message type:', data.type);
+            console.warn('Unknown signaling message:', data.type);
         }
       };
 
-      // 7) onnegotiationneeded: only trigger if we are the initiator
+      // If renegotiation is ever needed, only the initiator calls doCall()
       pc.onnegotiationneeded = async () => {
         if (
           isInitiatorRef.current &&
@@ -131,7 +130,7 @@ export default function Home() {
         remoteVideoRef.current.srcObject = null;
       }
     };
-  }, []); // <<── Remove isInitiator from the dependency array
+  }, []); // no isInitiatorRef in dependencies
 
   return (
     <div className="flex flex-col items-center space-y-4">
@@ -157,10 +156,7 @@ export default function Home() {
   );
 }
 
-async function doCall(
-  pc: RTCPeerConnection,
-  ws: WebSocket
-) {
+async function doCall(pc: RTCPeerConnection, ws: WebSocket) {
   try {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
